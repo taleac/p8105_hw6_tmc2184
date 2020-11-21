@@ -204,7 +204,7 @@ cv_df %>%
     values_to = "rmse",
     names_prefix = "rmse_") %>% 
   mutate(model = fct_inorder(model)) %>% 
-  ggplot(aes(x = model, y = rmse, color = "red")) + geom_violin()
+  ggplot(aes(x = model, y = rmse, color = "red")) + geom_violin() + theme(legend.position = "none")
 ```
 
 **From this plot, it is apparent that the model including only length at birth and gestational age is the worst fitting model. My model has the lowest cross-validated prediction error, and is therefor the preferred model, however, the model including head circumference, length, sex, and all two- and three-way interactions also performs decently well.**
@@ -214,6 +214,7 @@ cv_df %>%
 
 > For this problem, we’ll use the 2017 Central Park weather data that we’ve seen elsewhere. The code chunk below (adapted from the course website) will download these data.
 
+```{r read weather data}
 weather_df = 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
@@ -225,8 +226,79 @@ weather_df =
     tmin = tmin / 10,
     tmax = tmax / 10) %>%
   select(name, id, everything())
-The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response and tmin as the predictor, and are interested in the distribution of two quantities estimated from these data:
+```
 
-r^2
+> The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response and tmin as the predictor, and are interested in the distribution of two quantities estimated from these data:
+
+>r^2
 log(β^0∗β^1)
-Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities. Plot the distribution of your estimates, and describe these in words. Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for r^2 and log(β^0∗β^1). Note: broom::glance() is helpful for extracting r^2 from a fitted regression, and broom::tidy() (with some additional wrangling) should help in computing log(β^0∗β^1).
+
+>Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities. 
+
+```{r create bootstrap samples}
+boot_sample = function(df) {
+  sample_frac(df, replace = TRUE)
+}
+
+boot_straps = 
+  data_frame(
+    strap_number = 1:5000,
+    strap_sample = rerun(5000, boot_sample(weather_df))
+  )
+
+```
+```{r produce estimates}
+
+bootstrap_results = 
+  boot_straps %>% 
+  mutate(
+    models = map(strap_sample, ~lm(tmax ~ tmin, data = .x) ),
+    results = map(models, broom::tidy),
+    fit = map(models, broom::glance)) 
+beta_est = bootstrap_results %>% 
+  select(-strap_sample, -models) %>% 
+  unnest(results) %>%
+  select(strap_number, term, estimate) %>%
+  pivot_wider(names_from = "term", 
+              values_from = "estimate") 
+names(beta_est) = c("strap_number", "b0", "b1")
+beta_est = beta_est %>%
+  mutate(log.b0b1 = log(b0*b1)) %>%
+  select(strap_number, log.b0b1)
+r_est = bootstrap_results %>% 
+  select(-strap_sample, -models) %>% 
+  unnest(fit) %>%
+  select(strap_number, r.squared)
+all_est = left_join(beta_est, r_est)
+```
+
+>Plot the distribution of your estimates, and describe these in words. 
+
+```{r plot distribution of estimates}
+
+all_est %>%
+  pivot_longer(log.b0b1:r.squared,
+               names_to = "term",
+               values_to = "estimate") %>%
+    ggplot(aes(x = estimate)) + 
+  geom_density(color = "darkgreen", fill = "limegreen", lwd = 2) +  
+  facet_wrap(~term, scales = "free") +
+  theme(text = element_text(size = 15), 
+        legend.position = "none") 
+  
+
+```
+**The plots show that R-squared is generally quite high (the most commonly occuring value is around 0.91), and the most commonly occurring value for log(B0*B1) is around 2.02. The data appear to be relatively bell-shaped, but the distribution for log(B0*B1) is platykurtic (in a normal distribution, density is .40 at the peak).**
+
+>Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for r^2 and log(β^0∗β^1). Note: broom::glance() is helpful for extracting r^2 from a fitted regression, and broom::tidy() (with some additional wrangling) should help in computing log(β^0∗β^1).
+
+```{r get CIs}
+all_est %>% 
+  summarize(
+    ci_lower_r.squared = quantile(r.squared, 0.025), 
+    ci_upper_r.squared = quantile(r.squared, 0.975),
+    ci_lower_log.b0b1 = quantile(log.b0b1, 0.025), 
+    ci_upper_log.b0b1 = quantile(log.b0b1, 0.975))
+```
+
+
